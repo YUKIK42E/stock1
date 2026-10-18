@@ -1,4 +1,346 @@
 <!doctype html>
+<html lang="ja">
+<head>
 <meta charset="utf-8">
-<title>テスト</title>
-<p>公開できた。</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>銘柄チャート</title>
+<style>
+  :root {
+    --bg: #F5F7FA;
+    --panel: #FFFFFF;
+    --ink: #18212B;
+    --sub: #5B6673;
+    --line: #D9DEE5;
+    --price: #27458C;
+    --vol: #BCC6D6;
+    --up: #B3261E;
+    --down: #1B6E4B;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161C;
+      --panel: #1A2029;
+      --ink: #E6EAF0;
+      --sub: #9AA6B5;
+      --line: #2C3541;
+      --price: #8FB0FF;
+      --vol: #3A4658;
+      --up: #FF8A80;
+      --down: #7FD1A6;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", "Noto Sans JP", system-ui, sans-serif;
+    line-height: 1.6;
+    font-variant-numeric: tabular-nums;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 28px 20px 56px; }
+  h1 { font-size: 1.15rem; font-weight: 700; margin: 0 0 18px; }
+
+  form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 28px; }
+  label { display: block; font-size: .85rem; color: var(--sub); margin-bottom: 4px; }
+  input[type="text"] {
+    width: 11rem; padding: 9px 12px; font: inherit; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  }
+  button {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 9px 16px; cursor: pointer;
+  }
+  button.primary { background: var(--price); border-color: var(--price); color: var(--bg); font-weight: 700; }
+  button[aria-pressed="true"] { border-color: var(--price); color: var(--price); font-weight: 700; }
+  :focus-visible { outline: 2px solid var(--price); outline-offset: 2px; }
+
+  .head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  .head h2 { font-size: 1.5rem; margin: 0; line-height: 1.3; }
+  .code { color: var(--sub); }
+  .now { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  .now .close { font-size: 2.2rem; font-weight: 700; letter-spacing: -.01em; }
+  .now .diff { font-size: 1rem; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .asof { color: var(--sub); font-size: .85rem; }
+
+  .periods { display: flex; gap: 6px; margin-bottom: 10px; }
+  .periods button { padding: 5px 12px; font-size: .9rem; }
+  .chart { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 12px 8px; height: 360px; }
+
+  h3 { font-size: 1rem; margin: 32px 0 8px; }
+  dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); column-gap: 28px; }
+  dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  dt { color: var(--sub); }
+  dd { margin: 0; font-weight: 700; text-align: right; }
+  .note { color: var(--sub); font-size: .85rem; margin-top: 10px; }
+  .message { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+  .message p { margin: 0 0 8px; }
+  .message p:last-child { margin: 0; }
+  code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: .9em; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>銘柄チャート</h1>
+  <p class="note" style="margin:-8px 0 18px">表示している数値は、練習用の架空のデータです。実在の銘柄・株価ではありません。</p>
+
+  <form id="form" autocomplete="off">
+    <div>
+      <label for="code">銘柄コード</label>
+      <input id="code" type="text" inputmode="text" list="codes" placeholder="例: 6981">
+      <datalist id="codes"></datalist>
+    </div>
+    <button type="submit" class="primary">表示</button>
+  </form>
+
+  <div id="message" class="message" hidden></div>
+
+  <section id="view" hidden>
+    <div class="head">
+      <h2 id="name"></h2>
+      <span class="code" id="codeLabel"></span>
+    </div>
+    <div class="now">
+      <span class="close" id="close"></span>
+      <span class="diff" id="diff"></span>
+    </div>
+    <div class="asof" id="asof"></div>
+
+    <div class="periods" role="group" aria-label="表示期間" style="margin-top:18px">
+      <button type="button" data-days="20">1か月</button>
+      <button type="button" data-days="60">3か月</button>
+      <button type="button" data-days="120">6か月</button>
+      <button type="button" data-days="0">全期間</button>
+    </div>
+    <div class="chart"><canvas id="chart" role="img" aria-label="終値と出来高のチャート"></canvas></div>
+
+    <h3>指標</h3>
+    <dl id="indicators"></dl>
+    <p class="note" id="indNote"></p>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var state = { prices: new Map(), ind: new Map(), chart: null, days: 60, code: null };
+  var $ = function (id) { return document.getElementById(id); };
+
+  // "7203.T" と "7203" を同じ銘柄として扱う
+  function norm(s) {
+    return String(s == null ? '' : s).normalize('NFKC').trim().toUpperCase().replace(/\.T$/, '');
+  }
+  function num(v) {
+    if (v == null || String(v).trim() === '') return null;
+    var n = Number(v);
+    return isFinite(n) ? n : null;
+  }
+  // 引用符を含まない単純なCSV用
+  function parseCSV(text) {
+    var lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (l) { return l.trim() !== ''; });
+    if (!lines.length) return [];
+    var head = lines.shift().split(',').map(function (s) { return s.trim(); });
+    return lines.map(function (l) {
+      var cols = l.split(','), o = {};
+      head.forEach(function (h, i) { o[h] = (cols[i] == null ? '' : cols[i]).trim(); });
+      return o;
+    });
+  }
+  function fetchText(url) {
+    return fetch(url, { cache: 'no-cache' }).then(function (r) {
+      if (!r.ok) throw new Error(url + ' (' + r.status + ')');
+      return r.text();
+    });
+  }
+
+  function fmt(n, digits) {
+    if (n == null) return '—';
+    return n.toLocaleString('ja-JP', { minimumFractionDigits: digits || 0, maximumFractionDigits: digits || 0 });
+  }
+  // market_cap は RSS の返す値(百万円)として扱う。トヨタの値で桁が合うことを確認済み。
+  function fmtCap(m) {
+    if (m == null) return '—';
+    var oku = m / 100;
+    if (oku >= 10000) return fmt(oku / 10000, 1) + '兆円';
+    return fmt(oku, 0) + '億円';
+  }
+
+  function showMessage(html) {
+    $('view').hidden = true;
+    var box = $('message');
+    box.innerHTML = html;
+    box.hidden = false;
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function render(code) {
+    var rows = state.prices.get(code);
+    if (!rows || !rows.length) {
+      var list = Array.from(state.prices.keys()).join('、') || 'なし';
+      showMessage('<p>「' + escapeHtml(code) + '」の株価データがありません。</p>' +
+                  '<p>表示できる銘柄: ' + escapeHtml(list) + '</p>' +
+                  '<p>銘柄を増やすには、<code>prices.csv</code> にその銘柄の日足を追加してください。</p>');
+      return;
+    }
+    state.code = code;
+    $('message').hidden = true;
+    $('view').hidden = false;
+
+    var ind = state.ind.get(code) || null;
+    var last = rows[rows.length - 1], prev = rows.length > 1 ? rows[rows.length - 2] : null;
+
+    $('name').textContent = ind && ind.name ? ind.name : code;
+    $('codeLabel').textContent = code;
+    $('close').textContent = fmt(last.close, 0);
+    var diffEl = $('diff');
+    if (prev && prev.close) {
+      var d = last.close - prev.close, p = d / prev.close * 100;
+      diffEl.textContent = (d >= 0 ? '+' : '') + fmt(d, 0) + '(' + (p >= 0 ? '+' : '') + p.toFixed(2) + '%)';
+      diffEl.className = 'diff ' + (d >= 0 ? 'up' : 'down');
+    } else { diffEl.textContent = ''; }
+    $('asof').textContent = last.date + ' 時点の終値(前日比)';
+
+    document.querySelectorAll('.periods button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.days) === state.days));
+    });
+    drawChart(rows);
+    drawIndicators(ind);
+
+    var url = new URL(location.href);
+    url.searchParams.set('code', code);
+    history.replaceState(null, '', url);
+  }
+
+  function drawChart(rows) {
+    var view = state.days > 0 ? rows.slice(-state.days) : rows;
+    var labels = view.map(function (r) { return r.date; });
+    var closes = view.map(function (r) { return r.close; });
+    var vols = view.map(function (r) { return r.volume; });
+    var maxVol = Math.max.apply(null, vols.filter(function (v) { return v != null; }).concat([1]));
+    var ink = cssVar('--sub'), line = cssVar('--line');
+
+    if (state.chart) state.chart.destroy();
+    state.chart = new Chart($('chart'), {
+      data: {
+        labels: labels,
+        datasets: [
+          { type: 'line', label: '終値', data: closes, yAxisID: 'y', order: 1,
+            borderColor: cssVar('--price'), backgroundColor: cssVar('--price'),
+            borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0 },
+          { type: 'bar', label: '出来高', data: vols, yAxisID: 'y2', order: 2,
+            backgroundColor: cssVar('--vol'), borderWidth: 0 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + fmt(c.parsed.y, 0); } } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: ink, maxTicksLimit: 7, maxRotation: 0,
+               callback: function (v) { var s = this.getLabelForValue(v); return s.slice(2); } } },
+          y: { position: 'right', grid: { color: line }, ticks: { color: ink }, grace: '5%' },
+          y2: { display: false, max: maxVol * 4, min: 0 }
+        }
+      }
+    });
+    $('chart').setAttribute('aria-label',
+      labels[0] + ' から ' + labels[labels.length - 1] + ' までの終値と出来高のチャート');
+  }
+
+  function drawIndicators(ind) {
+    var dl = $('indicators');
+    dl.innerHTML = '';
+    if (!ind) {
+      $('indNote').textContent = 'この銘柄の指標は indicators.csv にまだありません。';
+      return;
+    }
+    var pct = function (v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
+    var times = function (v, d) { return v == null ? '—' : fmt(v, d) + '倍'; };
+    var items = [
+      ['PER', times(num(ind.per), 1)],
+      ['PBR', times(num(ind.pbr), 2)],
+      ['ROE(PBR÷PER)', pct(num(ind.roe))],
+      ['配当利回り', pct(num(ind.dividend_yield))],
+      ['信用倍率', times(num(ind.margin_ratio), 2)],
+      ['時価総額', fmtCap(num(ind.market_cap))],
+      ['出来高(取得時点)', num(ind.volume) == null ? '—' : fmt(num(ind.volume), 0) + '株']
+    ];
+    items.forEach(function (it) {
+      var row = document.createElement('div');
+      var dt = document.createElement('dt'); dt.textContent = it[0];
+      var dd = document.createElement('dd'); dd.textContent = it[1];
+      row.appendChild(dt); row.appendChild(dd); dl.appendChild(row);
+    });
+    $('indNote').textContent = '指標の取得日: ' + (ind.updated || '不明');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function init() {
+    Promise.all([fetchText('prices.csv'), fetchText('indicators.csv')]).then(function (res) {
+      parseCSV(res[0]).forEach(function (r) {
+        var k = norm(r.code);
+        if (!k || !r.date) return;
+        if (!state.prices.has(k)) state.prices.set(k, []);
+        state.prices.get(k).push({
+          date: r.date, open: num(r.open), high: num(r.high), low: num(r.low),
+          close: num(r.close), volume: num(r.volume)
+        });
+      });
+      state.prices.forEach(function (rows) { rows.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); });
+      parseCSV(res[1]).forEach(function (r) { var k = norm(r.code); if (k) state.ind.set(k, r); });
+
+      var dl = $('codes');
+      state.prices.forEach(function (_, k) { var o = document.createElement('option'); o.value = k; dl.appendChild(o); });
+
+      var first = state.prices.keys().next().value;
+      var start = norm(new URL(location.href).searchParams.get('code')) || first || '';
+      $('code').value = start;
+      if (start) render(start);
+      else showMessage('<p>prices.csv にデータがありません。</p>');
+    }).catch(function (err) {
+      showMessage('<p>データを読み込めませんでした: ' + escapeHtml(err.message) + '</p>' +
+        '<p><code>index.html</code> をダブルクリックで開いている場合は、ブラウザの制限で CSV を読めません。' +
+        'GitHub Pages に置くか、このフォルダで <code>python -m http.server</code> を実行して ' +
+        '<code>http://localhost:8000</code> を開いてください。</p>');
+    });
+  }
+
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var k = norm($('code').value);
+    if (k) render(k);
+  });
+  document.querySelector('.periods').addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    state.days = Number(b.dataset.days);
+    if (state.code) render(state.code);
+  });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+    if (state.code && state.prices.has(state.code)) render(state.code);
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>
