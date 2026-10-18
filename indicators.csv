@@ -1,0 +1,3 @@
+code,name,price,volume,per,pbr,roe,dividend,dividend_yield,margin_ratio,market_cap,updated
+0001,サンプルA(架空),2300,1200000,14.2,1.45,0.102,40,0.021,3.4,1250000,2026-10-18
+0002,サンプルB(架空),500,900000,9.8,0.72,0.073,25,0.034,1.8,320000,2026-10-18
