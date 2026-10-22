@@ -48,7 +48,7 @@
   form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 28px; }
   label { display: block; font-size: .85rem; color: var(--sub); margin-bottom: 4px; }
   input[type="text"] {
-    width: 11rem; padding: 9px 12px; font: inherit; color: var(--ink);
+    width: 17rem; max-width: 100%; padding: 9px 12px; font: inherit; color: var(--ink);
     background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   }
   button {
@@ -79,6 +79,10 @@
   dt { color: var(--sub); }
   dd { margin: 0; font-weight: 700; text-align: right; }
   .note { color: var(--sub); font-size: .85rem; margin-top: 10px; }
+  .load { margin-bottom: 28px; }
+  .load input[type="file"] { font: inherit; color: var(--ink); max-width: 100%; }
+  .load .note { margin: 6px 0 0; }
+  .cands { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .message { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
   .message p { margin: 0 0 8px; }
   .message p:last-child { margin: 0; }
@@ -89,16 +93,22 @@
 <body>
 <main>
   <h1>銘柄チャート</h1>
-  <p class="note" style="margin:-8px 0 18px">表示している数値は、練習用の架空のデータです。実在の銘柄・株価ではありません。</p>
+  <p class="note" id="demoNote" style="margin:-8px 0 18px">表示している数値は、練習用の架空のデータです。実在の銘柄・株価ではありません。</p>
 
   <form id="form" autocomplete="off">
     <div>
-      <label for="code">銘柄コード</label>
-      <input id="code" type="text" inputmode="text" list="codes" placeholder="例: 6981">
+      <label for="code">銘柄コードまたは銘柄名</label>
+      <input id="code" type="text" inputmode="text" list="codes" placeholder="例: 6981 / トヨタ">
       <datalist id="codes"></datalist>
     </div>
     <button type="submit" class="primary">表示</button>
   </form>
+
+  <div class="load">
+    <label for="files">手元のCSVを読み込む(複数選べます)</label>
+    <input id="files" type="file" accept=".csv,text/csv" multiple>
+    <p class="note" id="loadStatus" role="status">株価のCSV(code, date, open, high, low, close, volume)と指標のCSV(code, name, per, pbr など)を、まとめて選べます。ファイルはこのブラウザの中だけで処理され、送信も保存もされません。</p>
+  </div>
 
   <div id="message" class="message" hidden></div>
 
@@ -144,15 +154,76 @@
     var n = Number(v);
     return isFinite(n) ? n : null;
   }
-  // 引用符を含まない単純なCSV用
+  // 引用符を含まない単純なCSV用。戻り値の配列には見出し(head)も付ける
   function parseCSV(text) {
     var lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (l) { return l.trim() !== ''; });
-    if (!lines.length) return [];
+    var rows = [];
+    rows.head = [];
+    if (!lines.length) return rows;
     var head = lines.shift().split(',').map(function (s) { return s.trim(); });
-    return lines.map(function (l) {
+    rows = lines.map(function (l) {
       var cols = l.split(','), o = {};
       head.forEach(function (h, i) { o[h] = (cols[i] == null ? '' : cols[i]).trim(); });
       return o;
+    });
+    rows.head = head;
+    return rows;
+  }
+  // UTF-8 で読めなければ Shift_JIS として読む(ExcelのCSV保存への備え)
+  function decodeBuffer(buf) {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch (e) { return new TextDecoder('shift_jis').decode(buf); }
+  }
+  function normDate(s) {
+    var m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec(String(s).trim());
+    if (!m) return String(s).trim();
+    return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+  }
+  function kindOf(head) {
+    if (head.indexOf('code') >= 0 && head.indexOf('date') >= 0 && head.indexOf('close') >= 0) return 'prices';
+    if (head.indexOf('code') >= 0 && (head.indexOf('per') >= 0 || head.indexOf('pbr') >= 0)) return 'indicators';
+    return null;
+  }
+  // sources: [{name, text}] を株価・指標に振り分けて統合する。同じ銘柄・同じ日付は後のファイルが優先
+  function ingest(sources) {
+    var priceMap = new Map(), ind = new Map();
+    var report = { prices: 0, indicators: 0, skipped: [] };
+    sources.forEach(function (s) {
+      var rows = parseCSV(s.text), k = kindOf(rows.head);
+      if (k === 'prices') {
+        report.prices++;
+        rows.forEach(function (r) {
+          var c = norm(r.code), d = normDate(r.date);
+          if (!c || !r.date) return;
+          if (!priceMap.has(c)) priceMap.set(c, new Map());
+          priceMap.get(c).set(d, { date: d, open: num(r.open), high: num(r.high), low: num(r.low),
+                                   close: num(r.close), volume: num(r.volume) });
+        });
+      } else if (k === 'indicators') {
+        report.indicators++;
+        rows.forEach(function (r) { var c = norm(r.code); if (c) ind.set(c, r); });
+      } else {
+        report.skipped.push(s.name);
+      }
+    });
+    var prices = new Map();
+    priceMap.forEach(function (m, c) {
+      prices.set(c, Array.from(m.values()).sort(function (a, b) { return a.date < b.date ? -1 : 1; }));
+    });
+    return { prices: prices, ind: ind, report: report };
+  }
+  function applyData(prices, ind) {
+    state.prices = prices;
+    state.ind = ind;
+    var dl = $('codes');
+    dl.innerHTML = '';
+    prices.forEach(function (_, k) {
+      var i = ind.get(k), nm = i && i.name ? i.name : '';
+      var o = document.createElement('option');
+      o.value = k;
+      if (nm) o.label = nm;
+      dl.appendChild(o);
+      if (nm) { var o2 = document.createElement('option'); o2.value = nm; dl.appendChild(o2); }
     });
   }
   function fetchText(url) {
@@ -187,13 +258,7 @@
 
   function render(code) {
     var rows = state.prices.get(code);
-    if (!rows || !rows.length) {
-      var list = Array.from(state.prices.keys()).join('、') || 'なし';
-      showMessage('<p>「' + escapeHtml(code) + '」の株価データがありません。</p>' +
-                  '<p>表示できる銘柄: ' + escapeHtml(list) + '</p>' +
-                  '<p>銘柄を増やすには、<code>prices.csv</code> にその銘柄の日足を追加してください。</p>');
-      return;
-    }
+    if (!rows || !rows.length) { notFound(code); return; }
     state.code = code;
     $('message').hidden = true;
     $('view').hidden = false;
@@ -295,46 +360,110 @@
     });
   }
 
+  // 検索用の正規化: 全角半角・大小文字・空白を揃え、ひらがなはカタカナにそろえる
+  function fold(s) {
+    return String(s == null ? '' : s).normalize('NFKC').toLowerCase()
+      .replace(/[\u3041-\u3096]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) + 0x60); })
+      .replace(/\s+/g, '');
+  }
+  function label(code) {
+    var i = state.ind.get(code);
+    return i && i.name ? code + ' ' + i.name : code;
+  }
+  function notFound(query) {
+    var items = Array.from(state.prices.keys()).map(label).join('、') || 'なし';
+    showMessage('<p>「' + escapeHtml(query) + '」に一致する銘柄が見つかりません。</p>' +
+                '<p>表示できる銘柄: ' + escapeHtml(items) + '</p>' +
+                '<p>銘柄を増やすには、株価のCSVにその銘柄の日足を追加してください。</p>');
+  }
+  function showCandidates(query, codes) {
+    var html = '<p>「' + escapeHtml(query) + '」に一致する銘柄が複数あります。選んでください。</p><div class="cands">';
+    codes.forEach(function (c) {
+      html += '<button type="button" class="cand" data-code="' + escapeHtml(c) + '">' + escapeHtml(label(c)) + '</button>';
+    });
+    showMessage(html + '</div>');
+  }
+  // コード(.T の有無は問わない)、銘柄名の完全一致、銘柄名の部分一致、コードの前方一致の順で探す
+  function search(query) {
+    var q = fold(query);
+    if (!q) return;
+    var qc = norm(query);
+    if (state.prices.has(qc)) { render(qc); return; }
+    var exact = [], part = [];
+    state.prices.forEach(function (_, code) {
+      var i = state.ind.get(code), nm = i && i.name ? fold(i.name) : '';
+      if (nm && nm === q) exact.push(code);
+      else if ((nm && nm.indexOf(q) >= 0) || fold(code).indexOf(q) === 0) part.push(code);
+    });
+    var hits = exact.length ? exact : part;
+    if (hits.length === 1) { render(hits[0]); return; }
+    if (hits.length > 1) { showCandidates(query, hits); return; }
+    notFound(query);
+  }
+
+  function showFirst() {
+    var first = state.prices.keys().next().value;
+    var fromUrl = norm(new URL(location.href).searchParams.get('code'));
+    var start = state.prices.has(state.code) ? state.code
+              : state.prices.has(fromUrl) ? fromUrl : (first || '');
+    $('code').value = start;
+    if (start) render(start);
+    else showMessage('<p>株価のデータがありません。株価のCSVを読み込んでください。</p>');
+  }
+
   function init() {
     Promise.all([fetchText('prices.csv'), fetchText('indicators.csv')]).then(function (res) {
-      parseCSV(res[0]).forEach(function (r) {
-        var k = norm(r.code);
-        if (!k || !r.date) return;
-        if (!state.prices.has(k)) state.prices.set(k, []);
-        state.prices.get(k).push({
-          date: r.date, open: num(r.open), high: num(r.high), low: num(r.low),
-          close: num(r.close), volume: num(r.volume)
-        });
-      });
-      state.prices.forEach(function (rows) { rows.sort(function (a, b) { return a.date < b.date ? -1 : 1; }); });
-      parseCSV(res[1]).forEach(function (r) { var k = norm(r.code); if (k) state.ind.set(k, r); });
+      var r = ingest([{ name: 'prices.csv', text: res[0] }, { name: 'indicators.csv', text: res[1] }]);
+      applyData(r.prices, r.ind);
+      showFirst();
+    }).catch(function () {
+      $('demoNote').hidden = true;
+      showMessage('<p>同じフォルダの CSV を自動では読めませんでした。</p>' +
+        '<p>上の「手元のCSVを読み込む」から、株価と指標の CSV を選んでください。</p>');
+    });
+  }
 
-      var dl = $('codes');
-      state.prices.forEach(function (_, k) { var o = document.createElement('option'); o.value = k; dl.appendChild(o); });
-
-      var first = state.prices.keys().next().value;
-      var start = norm(new URL(location.href).searchParams.get('code')) || first || '';
-      $('code').value = start;
-      if (start) render(start);
-      else showMessage('<p>prices.csv にデータがありません。</p>');
+  function loadFiles(fileList) {
+    var files = Array.from(fileList);
+    if (!files.length) return;
+    Promise.all(files.map(function (f) {
+      return f.arrayBuffer().then(function (b) { return { name: f.name, text: decodeBuffer(b) }; });
+    })).then(function (sources) {
+      var r = ingest(sources), rep = r.report, st = $('loadStatus');
+      if (r.prices.size === 0) {
+        st.textContent = '株価のCSVが見つかりませんでした。1行目に code, date, close を含むファイルを選んでください。';
+        if (rep.skipped.length) st.textContent += '(認識できなかったファイル: ' + rep.skipped.join('、') + ')';
+        return;
+      }
+      applyData(r.prices, r.ind);
+      $('demoNote').hidden = true;
+      var msg = '読み込み完了: 株価 ' + rep.prices + ' ファイル(' + r.prices.size + ' 銘柄)、指標 ' +
+                rep.indicators + ' ファイル(' + r.ind.size + ' 銘柄)。ファイルはこのブラウザの中だけで処理されています。';
+      if (rep.skipped.length) msg += ' 認識できなかったファイル: ' + rep.skipped.join('、') + '(1行目の見出しを確認してください)。';
+      st.textContent = msg;
+      showFirst();
     }).catch(function (err) {
-      showMessage('<p>データを読み込めませんでした: ' + escapeHtml(err.message) + '</p>' +
-        '<p><code>index.html</code> をダブルクリックで開いている場合は、ブラウザの制限で CSV を読めません。' +
-        'GitHub Pages に置くか、このフォルダで <code>python -m http.server</code> を実行して ' +
-        '<code>http://localhost:8000</code> を開いてください。</p>');
+      $('loadStatus').textContent = 'ファイルを読み込めませんでした: ' + err.message;
     });
   }
 
   $('form').addEventListener('submit', function (e) {
     e.preventDefault();
-    var k = norm($('code').value);
-    if (k) render(k);
+    search($('code').value);
   });
   document.querySelector('.periods').addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (!b) return;
     state.days = Number(b.dataset.days);
     if (state.code) render(state.code);
   });
+  $('message').addEventListener('click', function (e) {
+    var b = e.target.closest('button.cand'); if (!b) return;
+    var c = b.getAttribute('data-code');
+    var i = state.ind.get(c);
+    $('code').value = i && i.name ? i.name : c;
+    render(c);
+  });
+  $('files').addEventListener('change', function (e) { loadFiles(e.target.files); });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
     if (state.code && state.prices.has(state.code)) render(state.code);
   });
